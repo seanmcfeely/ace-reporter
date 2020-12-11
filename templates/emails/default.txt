@@ -1,0 +1,6 @@
+The following reports are attached to this automated email:
+
+{<[report_context]>}
+
+Best regards, 
+ACE Ecosystem Reporter

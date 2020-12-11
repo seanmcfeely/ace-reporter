@@ -1,0 +1,154 @@
+
+<html lang="en">
+<head>
+  <title>{{title}}</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+</head>
+<body>
+
+  <div class="container-fluid" role="navigation">
+    <center><h2>{{title}}</h2></center>
+    <div class="row"><div class="col-md-8 col-md-push-2"><hr></div></div>
+    <div class="row">
+      <div class="col-md-6 col-md-push-3">
+        <details open>
+          <summary>Table of Contents</summary>
+
+          <ul>
+            <li><a href="#s1-overview">1 Overview</a></li>
+            <li><a href="#Alerts">2 Alert Metrics</a>
+              <ul>
+                {% for stat in alert_stat_report_map.keys() %}
+                    <li><a href="#alerts-{{stat}}">2.{{loop.index}} {{alert_stat_report_map[stat]['table'].name}}</a></li>
+                {% endfor %}
+              </ul>
+            </li>
+            <li><a href="#IndependantAlerts">3 Alert-Based Operational Tables</a>
+              <ul>
+                {% for table_key, table in independent_alert_tables.items() %}
+                    <li><a href="#independant-{{table_key}}">3.{{loop.index}} {{table.name}}</a></li>
+                {% endfor %}
+              </ul>
+            </li>
+            <li><a href="#Events">4 Event/Incident Metrics</a>
+              <ul>
+                {% for stat in event_stat_report_map.keys() %}
+                    <li><a href="#events-{{stat}}">4.{{loop.index}} {{event_stat_report_map[stat]['table'].name}}</a></li>
+                    {% set event_count = loop.index %}
+                {% endfor %}
+                {% for table_key, table in event_tables.items() %}
+                  {% set position = loop.index + event_stat_report_map.keys()|length %}
+                  <li><a href="#events-{{table_key}}">4.{{position}} {{table.name}}</a></li>
+                {% endfor %}
+              </ul>
+            </li>
+          </ul>
+        </details>
+      </div>
+    </div>
+    <div class="row"><div class="col-md-8 col-md-push-2"><hr></div></div>
+    <div id="s1-overview" class="row">
+      <div class="col-md-6 col-md-push-3">
+        <h3>1 Overview</h3>
+        <p>This is a high level report of the IDR operation from the perspective of alert and event based metrics.</p>
+      </div>
+    </div>
+    <div class="row"><div class="col-md-8 col-md-push-2"><hr></div></div>
+    <!--div class="row"><div class="col-md-6 col-md-push-3"><hr></div></div-->
+    <div id="Alerts">
+      <div class="row">
+        <div class="col-md-6 col-md-push-3">
+          <h3>2 Alert Metrics</h4>
+          <i>Calculations are based on data between {{start_date}} and {{end_date}}.</i>
+        </div>
+      </div>
+      <br>
+      {% for stat, data in alert_stat_report_map.items() %}
+        <div class="row" id="alerts-{{stat}}">
+          <div class="col-md-6 col-md-push-3">
+            <h4>2.{{loop.index}} {{data['table'].name}}</h4>
+          </div>
+        </div>
+        <center>
+          {{data['html_plot']|safe}}
+        </center>
+        <br><center><p><a role="button" data-toggle="collapse" data-target="#collapse_alert-{{stat}}_table">(Hide/Show Data Table)</a></p></center>
+        <div class="row collapse" id="collapse_alert-{{stat}}_table">
+            <div class="col-md-12">{{data['table'].to_html(classes='table table-hover')|safe}}</div>
+        </div>
+        {% if loop.index < alert_stat_report_map.keys()|length %}
+          <div class="row"><div class="col-md-4 col-md-push-4"><hr></div></div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    <div class="row"><div class="col-md-8 col-md-push-2"><hr></div></div>
+    <div id="IndependantAlerts">
+      <div class="row">
+        <div class="col-md-6 col-md-push-3">
+          <h3>3 Alert-Based Operational Data Tables</h3>
+          <i>Calculations are based on data between {{start_date}} and {{end_date}}.</i>
+        </div>
+      </div>
+      <br>
+      {% for table_key, table in independent_alert_tables.items() %}
+        <div class="row" id="independant-{{table_key}}">
+          <div class="col-md-6 col-md-push-3">
+            <h4>3.{{loop.index}} {{table.name}}</h4>
+          </div>
+        </div>
+        <div class="col-md-8 col-md-push-2">
+          {{table.to_html(classes='table table-hover')|safe}}
+        </div>
+      {% endfor %}
+    </div>
+    <div class="row"><div class="col-md-8 col-md-push-2"><hr></div></div>
+    <div id="Events">
+      <div class="row">
+        <div class="col-md-6 col-md-push-3">
+          <h3>4 Event/Incident Metrics</h3>
+          <i>Calculations are based on data between {{event_start_date}} and {{event_end_date}}.</i>
+        </div>
+      </div>
+      <br>
+      {% for stat, data in event_stat_report_map.items() %}
+        <div class="row" id="events-{{stat}}">
+          <div class="col-md-6 col-md-push-3">
+            <h4>4.{{loop.index}} {{data['table'].name}}</h4>
+          </div>
+        </div>
+        <center>
+        {{data['html_plot']|safe}}
+        </center>
+        <br><center><p><a role="button" data-toggle="collapse" data-target="#collapse_event-{{stat}}_table">(Hide/Show Data Table)</a></p></center>
+        <div class="row collapse" id="collapse_event-{{stat}}_table">
+            <div class="col-md-12">{{data['table'].to_html(classes='table table-hover')|safe}}</div>
+        </div>
+        <div class="row"><div class="col-md-4 col-md-push-4"><hr></div></div>
+        {% set event_count = loop.index %}
+      {% endfor %}
+      <br>
+      {% for table_key, table in event_tables.items() %}
+        {% set position = loop.index + event_stat_report_map.keys()|length %}
+        <div class="row" id="events-{{table_key}}">
+          <div class="col-md-6 col-md-push-3">
+            <h4>4.{{position}} {{table.name}} <a role="button" data-toggle="collapse" data-target="#collapse_{{table_key}}_data">(hide/show)</a></h4>
+          </div>
+        </div>
+        <div class="collapse col-md-12" id="collapse_{{table_key}}_data">
+          {{table.to_html(classes='table table-hover')|safe}}
+        </div>
+        {% if position < (loop.index + event_stat_report_map.keys()|length) %}
+          <div class="row"><div class="col-md-4 col-md-push-4"><hr></div></div>
+        {% endif %}
+        <!--div class="row"><div class="col-md-6 col-md-push-3"><hr></div></div-->
+      {% endfor %}
+    </div>
+    <br>
+  </div> <!-- end container -->
+  <br><br><!--breath-->
+</body>
+</html>

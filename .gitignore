@@ -1,0 +1,12 @@
+etc/config.ini
+logs
+incoming
+archive
+error_reporting
+ace_metrics
+metrics
+*__pycache__*
+var
+venv
+long_term
+.vscode

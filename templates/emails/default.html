@@ -1,0 +1,23 @@
+<html>
+    <body style="font-family: helvetica">
+        <p>The following report files are attached to this email:</p>
+        <ul style="list-style-type:none;">
+        {% for report in report_context_map.keys() %}
+            <li><p>{{report}}</p></li>
+        {% endfor %}
+        </ul>
+        <p><i>Report content summaries:</i></p>
+        {% for report in report_context_map.keys() %}
+          <b>{{report}}:</b>
+            <ul style="list-style-type:none;">
+            {% for data_table_name in report_context_map[report] %}
+                <li>{{data_table_name}}</li>
+            {% endfor %}
+            </ul>
+        {% endfor %}
+        <br>
+        <i><b>Note:</b> The reports may take a few seconds to load completely. The browser has to build the interactive plots. </i>
+        <br>
+        <p><i>Best regards</i>,<br>ACE Reporter</p>
+    </body>
+</html>
