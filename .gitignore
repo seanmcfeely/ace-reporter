@@ -1,4 +1,5 @@
 etc/config.ini
+bin/reporter.sh
 logs
 incoming
 archive

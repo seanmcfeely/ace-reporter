@@ -24,7 +24,7 @@ from tabulate import tabulate
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
-from metrics.alerts import ( get_alerts_between_dates,
+from ace_metrics.alerts import ( get_alerts_between_dates,
                              VALID_ALERT_STATS, 
                              FRIENDLY_STAT_NAME_MAP,
                              statistics_by_month_by_dispo,
@@ -33,9 +33,9 @@ from metrics.alerts import ( get_alerts_between_dates,
                              define_business_time
                             )
 
-from metrics.alerts.users import alert_quantities_by_user_by_month
+from ace_metrics.alerts.users import alert_quantities_by_user_by_month
 
-from metrics.alerts.alert_types import ( unique_alert_types_between_dates,
+from ace_metrics.alerts.alert_types import ( unique_alert_types_between_dates,
                                              count_quantites_by_alert_type,
                                              get_alerts_between_dates_by_type,
                                              generate_alert_type_stats,
@@ -43,7 +43,7 @@ from metrics.alerts.alert_types import ( unique_alert_types_between_dates,
                                              alert_type_quantities_by_category_by_month
                                             )
 
-from metrics.events import ( get_events_between_dates,
+from ace_metrics.events import ( get_events_between_dates,
                              get_incidents_from_events,
                              add_email_alert_counts_per_event,
                              count_event_dispositions_by_time_period,
@@ -51,7 +51,7 @@ from metrics.events import ( get_events_between_dates,
                              EVENT_DISPOSITIONS
                             )
 
-from metrics.helpers import generate_html_plot, dataframes_to_xlsx_bytes
+from ace_metrics.helpers import generate_html_plot, dataframes_to_xlsx_bytes
 
 #from helpers import send_email_notification
 
@@ -206,8 +206,8 @@ def load_report_context_map():
     """Load the previous report_context_map."""
     report_context_map_path = os.path.join(HOME_PATH, 'var', 'report_context_map')
     if not os.path.exists(report_context_map_path):
-        logging.error(f"{report_context_map_path} does not exist")
-        return False
+        logging.debug(f"{report_context_map_path} does not exist")
+        return {}
     with open(report_context_map_path, 'r') as fp:
             report_context_map = json.load(fp)
 
@@ -251,6 +251,10 @@ def main():
     config = configparser.ConfigParser()
     config.read(args.config_path)
 
+    # keep track of the reports
+    # load and save the report so it stays up-to-date with all archived report types
+    report_context_map = load_report_context_map()
+
     if args.send_archived_reports:
         report_context_map = load_report_context_map()
         return email_reports_based_on_configuration(config, report_context_map, args.send_archived_reports, archive=True)
@@ -282,9 +286,6 @@ def main():
         end_date = datetime.strptime(args.end_datetime, '%Y-%m-%d %H:%M:%S')
     else:
         end_date = event_end_date = datetime.utcnow()
-
-    # keep track of the reports
-    report_context_map = {}
 
     #######################
     ## High Level Report ##
@@ -409,7 +410,7 @@ def main():
         return False
     logging.info(f"wrote {report_file_name}")
 
-    # generate xlsx document - see also metrics.helpers.dataframes_to_archive_bytes_of_json_files
+    # generate xlsx document - see also ace_metrics.helpers.dataframes_to_archive_bytes_of_json_files
     filename = f"ACE_IDR_HighLevel_Metrics_{datetime.now().date()}.xlsx"
     with open(f"{INCOMING_DIR}/{filename}.{report_type}", 'wb') as fp:
         fp.write(dataframes_to_xlsx_bytes(tables_for_xlsx))
@@ -425,9 +426,10 @@ def main():
     save_report_context_map(report_context_map)
 
     # delete archived reports
-    for report_path in glob.glob(f"{os.path.join(ARCHIVE_DIR)}/*"):
-        os.remove(report_path)
-        logging.info(f"deleted old report: {report_path}")
+    for report_type in args.approved_reports:
+        for report_path in glob.glob(f"{os.path.join(ARCHIVE_DIR)}/*.{report_type}"):
+            os.remove(report_path)
+            logging.info(f"deleted old report: {report_path}")
 
     # move new reports to archive
     for report_path in glob.glob(f"{os.path.join(INCOMING_DIR)}/*"):
