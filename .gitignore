@@ -1,11 +1,10 @@
+data_exceptions/
 etc/config.ini
 bin/reporter.sh
 logs
 incoming
 archive
 error_reporting
-ace_metrics
-metrics
 *__pycache__*
 var
 venv
