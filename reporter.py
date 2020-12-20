@@ -12,8 +12,11 @@ import configparser
 import traceback
 import pandas_bokeh
 
+import shutil
 import smtplib
 import email
+import zipfile
+
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
@@ -24,6 +27,8 @@ from tabulate import tabulate
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
+from data_exceptions import apply_alert_data_exceptions
+
 from ace_metrics.alerts import ( get_alerts_between_dates,
                              VALID_ALERT_STATS, 
                              FRIENDLY_STAT_NAME_MAP,
@@ -33,7 +38,9 @@ from ace_metrics.alerts import ( get_alerts_between_dates,
                              define_business_time
                             )
 
-from ace_metrics.alerts.users import alert_quantities_by_user_by_month
+from ace_metrics.alerts.users import ( get_all_users,
+                                       generate_user_alert_stats,
+                                       alert_quantities_by_user_by_month )
 
 from ace_metrics.alerts.alert_types import ( unique_alert_types_between_dates,
                                              count_quantites_by_alert_type,
@@ -163,12 +170,12 @@ def floor_datetime_week(dt):
 
 
 def email_reports_based_on_configuration(config: configparser.ConfigParser, report_context_map: dict, approved_reports: list, archive=False):
-    # Send configured email notifications
+    """Email reports as configured."""
     notification_list = [section for section in config.sections() if section.startswith('report_type_')]
     for notification_key in notification_list:
         report_type = notification_key[len('report_type_'):]
         if report_type not in approved_reports:
-            logging.info(f"skipping {notification_key} as {report_type} not in approved report list.")
+            logging.debug(f"skipping {notification_key} as {report_type} not in approved report list.")
             continue
         notification_config = config[notification_key]
         notification_template_path = os.path.join(HOME_PATH, notification_config['email_template'])
@@ -213,83 +220,14 @@ def load_report_context_map():
 
     return report_context_map
 
-
-def main():
-
-    parser = argparse.ArgumentParser(description="Sends ACE Metric reports to users based on role/need map.")
-    parser.add_argument('-d', '--debug', action='store_true', help="Turn on debug logging.")
-    parser.add_argument('--logging-config', required=False, default='etc/logging.ini', dest='logging_config',
-        help="Path to logging configuration file.  Defaults to etc/logging.ini")
-    parser.add_argument('-c', '--config', required=False, default='etc/config.ini', dest='config_path',
-        help="Path to configuration file.  Defaults to etc/config.ini")
-
-    parser.add_argument('-s', '--start_datetime', action='store', default=None,
-                        help="Override the start datetime data is in scope. Format: YYYY-MM-DD HH:MM:SS.")
-    parser.add_argument('-e', '--end_datetime', action='store', default=None,
-                         help="Override the end datetime data is in scope. Format: YYYY-MM-DD HH:MM:SS.")
-
-    # hard code for now
-    available_reports = {'high_level': "IDR operational alert, event, and indicator based metrics."}
-    parser.add_argument('-r', '--report-type', action='append', default=list(available_reports.keys()), 
-                        choices=list(available_reports.keys()), dest="approved_reports",
-                        help="Specify specific reports to generate. Default: All configured reports.")
-
-    parser.add_argument('-sar', '--send-archived-report', action='append', default=[], 
-                        choices=list(available_reports.keys()), dest="send_archived_reports",
-                        help="Specify specific reports to send from archive. Default: All archived reports.")
-
-    args = parser.parse_args()
-
-    # work out of home dir
-    os.chdir(HOME_PATH)
-
-    coloredlogs.install(level='INFO', logger=logging.getLogger())
-
-    if args.debug:
-        coloredlogs.install(level='DEBUG', logger=logging.getLogger())
-
-    config = configparser.ConfigParser()
-    config.read(args.config_path)
-
-    # keep track of the reports
-    # load and save the report so it stays up-to-date with all archived report types
-    report_context_map = load_report_context_map()
-
-    if args.send_archived_reports:
-        report_context_map = load_report_context_map()
-        return email_reports_based_on_configuration(config, report_context_map, args.send_archived_reports, archive=True)
-        
-    smtp_config = config['smtp']
-    db_config = config['database']
-    #recipient_groups = config['recipient_groups']
-
-    # default selected comanies
-    companies = config['global'].get('companies', "").split(',')
-
-    # connect to ACE DB
-    ssl_settings = None
-    if os.path.exists(db_config.get('ssl_ca_path')):
-        ssl_settings = {'ca': db_config['ssl_ca_path']}
-
-    password = db_config.get('pass')
-    if not password:
-        password = getpass(f"Enter password for {db_config['host']}: ")
-
-    db = pymysql.connect(host=db_config['host'], user=db_config['user'], password=password, database=db_config['database'], ssl=ssl_settings)
-
-    # set date scope time periods
-    start_date = end_date = event_start_date = event_end_date = None
-    if args.start_datetime:
-        start_date = datetime.strptime(args.start_datetime, '%Y-%m-%d %H:%M:%S')
-        event_start_date = start_date # eh
-    if args.end_datetime:
-        end_date = datetime.strptime(args.end_datetime, '%Y-%m-%d %H:%M:%S')
-    else:
-        end_date = event_end_date = datetime.utcnow()
-
-    #######################
-    ## High Level Report ##
-    #######################
+def create_high_level_report(config: configparser.ConfigParser,
+                             db: pymysql.connections.Connection,
+                             start_date: datetime,
+                             end_date: datetime,
+                             event_start_date: datetime,
+                             event_end_date: datetime,
+                             report_context_map: dict):
+    """High Level Report."""
     # alert stat tables
     report_type = "high_level"
     report_file_name = f"IDR High Level Report - {datetime.now().date()}.html"
@@ -304,13 +242,35 @@ def main():
     report_context_map[report_type] = {}
     report_context_map[report_type][report_file_name] = []
     tables_for_xlsx = []
+    # default selected comanies
+    companies = config['global'].get('companies', "").split(',')
+
+    logging.info(f"generating high level report: alert data('{start_date}' and '{end_date}') and event data('{event_start_date}' and '{event_end_date}')")
 
     # general alert statistic plots & tables
     alerts = get_alerts_between_dates(start_date, end_date, db, selected_companies=companies)  
+
+    # ~ apply any custom data exceptions ~ #
+    exception_list = report_config['alert_data_exception_list'].split(',')
+    alerts = apply_alert_data_exceptions(config, alerts, exception_list)
+
     alert_stat_map = statistics_by_month_by_dispo(alerts)
+    # append business hours?
+    alert_stat_map_bh = None
+    if report_config.getboolean('append_business_hours'):
+        business_hours = define_business_time()
+        alert_stat_map_bh = statistics_by_month_by_dispo(alerts, business_hours=business_hours)
+
     alert_stat_report_map = {}
     for stat in VALID_ALERT_STATS:
         alert_stat_map[stat].name = FRIENDLY_STAT_NAME_MAP[stat]
+        if alert_stat_map_bh:
+            if 'time' in stat:
+                alert_stat_map_bh[stat].name = f"{FRIENDLY_STAT_NAME_MAP[stat]} (Business Hours)"
+                alert_stat_report_map[f"{stat}-BH"] = {'table': alert_stat_map_bh[stat],
+                                                        'html_plot': generate_html_plot(alert_stat_map_bh[stat])}
+                report_context_map[report_type][report_file_name].append(f"Alerts: {alert_stat_map_bh[stat].name}")
+                tables_for_xlsx.append(alert_stat_map_bh[stat])
         alert_stat_report_map[stat] = {'table': alert_stat_map[stat],
                                        'html_plot': generate_html_plot(alert_stat_map[stat])}
         report_context_map[report_type][report_file_name].append(f"Alerts: {FRIENDLY_STAT_NAME_MAP[stat]}")
@@ -375,7 +335,7 @@ def main():
     tables_for_xlsx.append(events_by_time_period_by_dispo)
 
     # event tables for xlsx
-    # NOTE: update email template to comment on attached xlsx documents
+    # NOTE: update email template to comment on attached xlsx document?
     event_tables = {}
     # follow config to scope down the data as these tables can be huge
     raw_event_data_start_date = event_end_date - relativedelta(months=report_config.getint('raw_event_incident_table_data_scope_months'))
@@ -416,13 +376,267 @@ def main():
         fp.write(dataframes_to_xlsx_bytes(tables_for_xlsx))
     if os.path.exists(filename):
         logging.info(f"wrote {filename}")
-    ## End High Level Report ##
-    ###########################
+
+    return report_context_map
+
+def main():
+
+    parser = argparse.ArgumentParser(description="Sends ACE Metric reports to users based on role/need map.")
+    parser.add_argument('-d', '--debug', action='store_true', help="Turn on debug logging.")
+    parser.add_argument('--logging-config', required=False, default='etc/logging.ini', dest='logging_config',
+        help="Path to logging configuration file.  Defaults to etc/logging.ini")
+    parser.add_argument('-c', '--config', required=False, default='etc/config.ini', dest='config_path',
+        help="Path to configuration file.  Defaults to etc/config.ini")
+
+    parser.add_argument('-s', '--start_datetime', action='store', default=None,
+                        help="Override the start datetime data is in scope. Format: YYYY-MM-DD HH:MM:SS.")
+    parser.add_argument('-e', '--end_datetime', action='store', default=None,
+                         help="Override the end datetime data is in scope. Format: YYYY-MM-DD HH:MM:SS.")
+
+    # hard code for now
+    available_reports = {'high_level': "IDR operational alert, event, and indicator based metrics.",
+                         'analysts': "Statistics for analysts."}
+    parser.add_argument('-r', '--report-type', action='append', default=[], 
+                        choices=list(available_reports.keys()), dest="approved_reports",
+                        help="Specify specific reports to generate. Default: All configured reports.")
+
+    parser.add_argument('-sar', '--send-archived-report', action='append', default=[], 
+                        choices=list(available_reports.keys()), dest="send_archived_reports",
+                        help="Specify specific reports to send from archive. Default: All archived reports.")
+
+    args = parser.parse_args()
+
+    if not args.approved_reports:
+        logging.error("You must specify a report to run.")
+        return True
+        # XXX Should it not default to all reports?
+        #args.approved_reports = list(available_reports.keys())
+
+    # work out of home dir
+    os.chdir(HOME_PATH)
+
+    coloredlogs.install(level='INFO', logger=logging.getLogger())
+
+    if args.debug:
+        coloredlogs.install(level='DEBUG', logger=logging.getLogger())
+
+    config = configparser.ConfigParser()
+    config.read(args.config_path)
+
+    # keep track of the reports
+    # load and save the report so it stays up-to-date with all archived report types
+    report_context_map = load_report_context_map()
+
+    if args.send_archived_reports:
+        report_context_map = load_report_context_map()
+        return email_reports_based_on_configuration(config, report_context_map, args.send_archived_reports, archive=True)
+        
+    # connect
+    db_config = config['database']
+    ssl_settings = None
+    if os.path.exists(db_config.get('ssl_ca_path')):
+        ssl_settings = {'ca': db_config['ssl_ca_path']}
+
+    password = db_config.get('pass')
+    if not password:
+        password = getpass(f"Enter password for {db_config['host']}: ")
+
+    db = pymysql.connect(host=db_config['host'], user=db_config['user'], password=password, database=db_config['database'], ssl=ssl_settings)
+
+    # set date scope time periods
+    start_date = end_date = event_start_date = event_end_date = None
+    if args.start_datetime:
+        start_date = datetime.strptime(args.start_datetime, '%Y-%m-%d %H:%M:%S')
+        event_start_date = start_date # eh
+    if args.end_datetime:
+        end_date = event_end_date = datetime.strptime(args.end_datetime, '%Y-%m-%d %H:%M:%S')
+    else:
+        end_date = event_end_date = datetime.utcnow()
+
+    ## High Level Report ##
+    if 'high_level' in args.approved_reports:
+        report_context_map = create_high_level_report(config, db, start_date, end_date,
+                                                  event_start_date, event_end_date, report_context_map)
+
+    ####################
+    ## Analyst Report ##
+    ####################
+    if 'analysts' in args.approved_reports:
+        report_type = "analysts"
+        report_date = datetime.now().date()
+        zip_report_file_name = f"IDR Analyst Report - {report_date}.zip"
+        report_file_name = f"IDR Analyst Report - {report_date}.html"
+        report_config = config[f"report_type_{report_type}"]
+        report_template = report_config['report_template']
+        if report_config.getboolean('exact_end_time_period'):
+            end_date = floor_datetime_month(end_date)
+            event_end_date = floor_datetime_week(event_end_date)
+        if start_date is None:
+            start_date = end_date - relativedelta(months=report_config.getint('data_scope_months_before_end_time'))
+
+        # default selected comanies
+        companies = config['global'].get('companies', "").split(',')
+
+        logging.info(f"generating analyst report with alert data between '{start_date}' and '{end_date}'")
+
+        report_context_map[report_type] = {}
+        report_context_map[report_type][zip_report_file_name] = []
+        tables_for_xlsx = []
+
+        user_ids = []
+        users = get_all_users(db)
+
+        analyst_usernames = report_config.get('users').split(',')
+        if analyst_usernames:
+            for username in analyst_usernames:
+                user_ids.extend([user_id for user_id, user in users.items() if username == user['username']])
+        else:
+            # all users
+            user_ids = [user_id for user_id in users.keys()]
+            analyst_usernames = [u['username'] for _,u in users.items()]
+        
+        overall_analyst_tables = {}
+        # append the quantity by analyst plot & table - also included in high_level
+        user_dispositions_per_month_all = alert_quantities_by_user_by_month(start_date, end_date, db)
+        # narrow
+        # re-index will replace empty columns (like when you get new analysts)
+        user_dispositions_per_month = user_dispositions_per_month_all.reindex(columns=analyst_usernames)
+        user_dispositions_per_month.name = user_dispositions_per_month_all.name
+        overall_analyst_tables['analyst-alert-quantities'] = {'table': user_dispositions_per_month,
+                                                              'html_plot': generate_html_plot(user_dispositions_per_month)}
+        report_context_map[report_type][zip_report_file_name].append(user_dispositions_per_month.name)
+        tables_for_xlsx.append(user_dispositions_per_month)
+
+        # all alerts
+        alerts = get_alerts_between_dates(start_date, end_date, db, selected_companies=companies)
+
+        # individual analyst alert stats
+        all_user_stat_map = generate_user_alert_stats(alerts, users)
+
+        # append business hours?
+        all_user_stat_map_bh = None
+        if report_config.getboolean('append_business_hours'):
+            business_hours = define_business_time()
+            all_user_stat_map_bh = generate_user_alert_stats(alerts, users, business_hours=business_hours)
+
+        analyst_report_file_map = {}
+        for user_id in user_ids:
+            analyst_report_file_map[user_id] = f"{users[user_id]['display_name']} Analyst Report - {report_date}.html"
+            #report_context_map[report_type][analyst_report_file_map[user_id]] = []
+
+        analyst_stat_report_map = {}
+        for user_id in user_ids:
+            analyst_stat_report_map[user_id] = {}
+            for stat in VALID_ALERT_STATS:
+                all_user_stat_map[user_id][stat].name = f"{users[user_id]['display_name']}: {FRIENDLY_STAT_NAME_MAP[stat]}"
+                if all_user_stat_map_bh is not None:
+                    if 'time' in stat:
+                        all_user_stat_map_bh[user_id][stat].name = f"{users[user_id]['display_name']}: {FRIENDLY_STAT_NAME_MAP[stat]} (Business Hours)"
+                        analyst_stat_report_map[user_id][f"{stat}-BH"] = {'table': all_user_stat_map_bh[user_id][stat],
+                                                                          'html_plot': generate_html_plot(all_user_stat_map_bh[user_id][stat])}
+                        report_context_map[report_type][zip_report_file_name].append(f"{users[user_id]['display_name']}: {all_user_stat_map_bh[user_id][stat].name}")
+                        tables_for_xlsx.append(all_user_stat_map_bh[user_id][stat])
+                analyst_stat_report_map[user_id][stat] = {'table': all_user_stat_map[user_id][stat],
+                                                          'html_plot': generate_html_plot(all_user_stat_map[user_id][stat])}
+
+                report_context_map[report_type][zip_report_file_name].append(f"{users[user_id]['display_name']}: {FRIENDLY_STAT_NAME_MAP[stat]}")
+                tables_for_xlsx.append(all_user_stat_map[user_id][stat])
+
+        # render the html report
+        template = None
+        with open(os.path.join(HOME_PATH, report_template), 'r') as fp:
+            template = Template(fp.read())
+        if template is None:
+            logging.error(f"failed to load templated.")
+            return False
+        report_html = template.render(analyst_stat_report_map=analyst_stat_report_map,
+                                      overall_analyst_tables=overall_analyst_tables,
+                                      analyst_report_file_map=analyst_report_file_map,
+                                      users=users,
+                                      start_date=start_date.strftime('%Y-%m-%d %H:%M:%S'),
+                                      end_date=end_date.strftime('%Y-%m-%d %H:%M:%S'),
+                                      title="AshSec IDR Analyst Report")
+        top_level_report_write_path = os.path.join(INCOMING_DIR, f"{report_file_name}")#.{report_type}")
+        with open(top_level_report_write_path, 'w') as fp:
+            fp.write(report_html)
+        if not os.path.exists(top_level_report_write_path):
+            logging.error(f"failed to write report: {top_level_report_write_path}")
+            return False
+        logging.info(f"wrote {report_file_name}")
+
+        # dir to hole individual analyst reports
+        analyst_report_tmp_dir = os.path.join(INCOMING_DIR, 'analysts')
+        if not os.path.isdir(analyst_report_tmp_dir):
+            os.mkdir(analyst_report_tmp_dir)
+
+        # the individual analyst template
+        analyst_report_template_path = report_config['analyst_report_template']
+        analyst_report_template = ""
+        with open(os.path.join(HOME_PATH, analyst_report_template_path), 'r') as fp:
+            analyst_report_template = fp.read()
+
+        for user_id in user_ids:
+            analyst_template = Template(analyst_report_template)
+            analyst_report_file_name = analyst_report_file_map[user_id]
+            logging.info(f"writing {analyst_report_file_name}..")
+            analyst_report = analyst_template.render(analyst_stat_report_map=analyst_stat_report_map,
+                                                    overall_analyst_tables=overall_analyst_tables,
+                                                    analyst_report_file_map=analyst_report_file_map,
+                                                    users=users,
+                                                    user_id=user_id,
+                                                    top_level_report_name=report_file_name,
+                                                    start_date=start_date.strftime('%Y-%m-%d %H:%M:%S'),
+                                                    end_date=end_date.strftime('%Y-%m-%d %H:%M:%S'),
+                                                    title=f"{users[user_id]['display_name']} Analyst Report")
+            _report_write_path = f"{analyst_report_tmp_dir}/{analyst_report_file_name}"#.{report_type}"
+            with open(_report_write_path, 'w') as fp:
+                fp.write(analyst_report)
+            if not os.path.exists(_report_write_path):
+                logging.error(f"failed to write report: {_report_write_path}")
+                return False
+            logging.info(f"wrote {analyst_report_file_name}")
+
+        # zip up analysts dir and top level page
+        _zip_write_path = os.path.join(INCOMING_DIR, f"{zip_report_file_name}.{report_type}")
+        zipf = zipfile.ZipFile(_zip_write_path, 'w', zipfile.ZIP_DEFLATED)
+        try:
+            abs_src = os.path.abspath(analyst_report_tmp_dir)
+            for dirname, subdirs, files in os.walk(analyst_report_tmp_dir):
+                for filename in files:
+                    absname = os.path.abspath(os.path.join(dirname, filename))
+                    arcname = absname[len(abs_src) + 1:]
+                    logging.debug(f"zipping {absname} as analysts/{arcname}")
+                    zipf.write(absname, f"analysts/{arcname}")
+            logging.info(f"zipping {top_level_report_write_path} as {report_file_name}")
+            zipf.write(top_level_report_write_path, report_file_name)
+            zipf.close()
+        except Exception as e:
+            logging.error(f"couldn't zip up analyst report: {e}")
+
+
+        if os.path.exists(_zip_write_path):
+            logging.info(f"wrote {_zip_write_path}.")
+            logging.info("deleting leftover {report_type} report files...")
+            try:
+                shutil.rmtree(analyst_report_tmp_dir)
+            except OSError as e:
+                logging.error(f"couldn't delete: {analyst_report_tmp_dir}")
+            os.remove(top_level_report_write_path)
+
+        # generate xlsx document - see also ace_metrics.helpers.dataframes_to_archive_bytes_of_json_files
+        filename = f"ACE_IDR_Analyst_Metrics_{datetime.now().date()}.xlsx"
+        with open(f"{INCOMING_DIR}/{filename}.{report_type}", 'wb') as fp:
+            fp.write(dataframes_to_xlsx_bytes(tables_for_xlsx))
+        if os.path.exists(filename):
+            logging.info(f"wrote {filename}")
+
+    ## End Analyst Report ##
+    ########################
 
     # Send configured email notifications
     email_reports_based_on_configuration(config, report_context_map, args.approved_reports)
  
-    # save state
+    # save report context
     save_report_context_map(report_context_map)
 
     # delete archived reports
@@ -444,5 +658,4 @@ if __name__ == '__main__':
     try:
         sys.exit(main())
     except Exception as e:
-        logging.critical(f"uncaught exception: {e}")
         write_error_report(f"uncaught exception: {e}")

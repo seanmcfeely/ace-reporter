@@ -1,0 +1,78 @@
+
+<html lang="en">
+<head>
+  <title>{{title}}</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+</head>
+<body>
+
+  <div class="container-fluid" role="navigation">
+    <center><h2>{{title}}</h2></center>
+    <div class="row"><div class="col-md-8 col-md-push-2"><hr></div></div>
+    <div class="row">
+      <div class="col-md-6 col-md-push-3">
+        <details open>
+          <summary>Table of Contents</summary>
+
+          <ul>
+            <li><a href="../{{top_level_report_name}}#s1-overview">1 Overview</a></li>
+            <li><a href="../{{top_level_report_name}}#Overall">2 Overall Analyst Metrics</a>
+              <ul>
+                {% for stat in overall_analyst_tables.keys() %}
+                  <li><a href="..{{top_level_report_name}}#overall-{{stat}}">2.{{loop.index}} {{overall_analyst_tables[stat]['table'].name}}</a></li>
+                {% endfor %}
+              </ul>
+            </li>
+            <li><a href="#iAnalyst">3 Analyst Metrics</a>
+              <ul>
+                {% for user_id in analyst_stat_report_map.keys() %}
+                    <li><a href="../analysts/{{analyst_report_file_map[user_id]}}">3.{{loop.index}} {{users[user_id]['display_name']}} Metrics</a>
+                    {% set analyst_count = loop.index %}
+                      <ul>
+                        {% for stat in analyst_stat_report_map[user_id].keys() %}
+                          <li><a href="../analysts/{{analyst_report_file_map[user_id]}}#analyst-{{user_id}}-{{stat}}">3.{{analyst_count}}.{{loop.index}} {{analyst_stat_report_map[user_id][stat]['table'].name}}</a></li>
+                        {% endfor %}
+                      </ul>
+                    </li>
+                {% endfor %}
+              </ul>
+            </li>
+          </ul>
+        </details>
+
+      </div>
+    </div>
+    <div class="row"><div class="col-md-8 col-md-push-2"><hr></div></div>
+    <div id="analyst">
+      <div class="row">
+        <div class="col-md-6 col-md-push-3">
+          <h3>1 {{users[user_id]['display_name']}} Metrics</h3>
+          <i>Calculations are based on data between {{start_date}} and {{end_date}}.</i>
+        </div>
+      </div>
+      <br>
+        {% for stat, data in analyst_stat_report_map[user_id].items() %}
+          <div class="row" id="analyst-{{user_id}}-{{stat}}">
+            <div class="col-md-6 col-md-push-3">
+              <h5>1.{{loop.index}} {{data['table'].name}}</h5>
+            </div>
+          </div>
+          <center>
+          {{data['html_plot']|safe}}
+          </center>
+          <br><center><p><a role="button" data-toggle="collapse" data-target="#collapse_analyst-{{stat}}_table">(Hide/Show Data Table)</a></p></center>
+          <div class="row collapse" id="collapse_analyst-{{stat}}_table">
+              <div class="col-md-12">{{data['table'].to_html(classes='table table-hover')|safe}}</div>
+          </div>
+          <div class="row"><div class="col-md-4 col-md-push-4"><hr></div></div>
+        {% endfor %}
+    </div>
+    <br>
+  </div> <!-- end container -->
+  <br><br><!--breath-->
+</body>
+</html>
