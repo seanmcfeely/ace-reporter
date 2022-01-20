@@ -231,15 +231,17 @@ def load_report_context_map():
 def create_high_level_report(
     config: configparser.ConfigParser,
     db: pymysql.connections.Connection,
+    report_type: str,
     start_date: datetime,
     end_date: datetime,
     event_start_date: datetime,
     event_end_date: datetime,
     report_context_map: dict,
+    no_analyst_metrics: bool=False,
 ):
     """High Level Report."""
     # alert stat tables
-    report_type = "high_level"
+    #report_type = "high_level"
     report_file_name = f"IDR High Level Report - {datetime.now().date()}.html"
     report_config = config[f"report_type_{report_type}"]
     report_template = report_config["report_template"]
@@ -251,6 +253,11 @@ def create_high_level_report(
         event_start_date = event_end_date - relativedelta(
             months=report_config.getint("event_data_scope_months_before_end_time")
         )
+    if report_config.getboolean("exact_end_time_period"):
+        # move to the last second of the previous month
+        end_date = end_date - timedelta(seconds=1)
+        event_end_date = event_end_date - timedelta(seconds=1)
+
     report_context_map[report_type] = {}
     report_context_map[report_type][report_file_name] = []
     tables_for_xlsx = []
@@ -295,13 +302,14 @@ def create_high_level_report(
         tables_for_xlsx.append(alert_stat_map[stat])
 
     # append the quantity by analyst plot & table
-    user_dispositions_per_month = alert_quantities_by_user_by_month(start_date, end_date, db)
-    alert_stat_report_map["analyst-alert-quantities"] = {
-        "table": user_dispositions_per_month,
-        "html_plot": generate_html_plot(user_dispositions_per_month),
-    }
-    report_context_map[report_type][report_file_name].append(f"Alerts: {user_dispositions_per_month.name}")
-    tables_for_xlsx.append(user_dispositions_per_month)
+    if not no_analyst_metrics:
+        user_dispositions_per_month = alert_quantities_by_user_by_month(start_date, end_date, db)
+        alert_stat_report_map["analyst-alert-quantities"] = {
+            "table": user_dispositions_per_month,
+            "html_plot": generate_html_plot(user_dispositions_per_month),
+        }
+        report_context_map[report_type][report_file_name].append(f"Alerts: {user_dispositions_per_month.name}")
+        tables_for_xlsx.append(user_dispositions_per_month)
 
     # alerts by alert type quantities plot & table
     alert_type_categories_key = {}
@@ -354,7 +362,7 @@ def create_high_level_report(
         event_start_date, event_end_date, db, selected_companies=companies, event_query=event_query
     )
     events.set_index(time_period, inplace=True)
-    events_by_time_period_by_dispo = count_event_dispositions_by_time_period(time_period, events, EVENT_DISPOSITIONS)
+    events_by_time_period_by_dispo = count_event_dispositions_by_time_period(time_period, events, dispositions=events["Disposition"].unique())
     events_by_time_period_by_dispo.name = f"Event/Incident Quantities per {time_period}"
     _plot = generate_html_plot(events_by_time_period_by_dispo, xlabel=time_period, ylabel="Quantity")
     event_stat_report_map["event-quantities"] = {"table": events_by_time_period_by_dispo, "html_plot": _plot}
@@ -369,6 +377,12 @@ def create_high_level_report(
         months=report_config.getint("raw_event_incident_table_data_scope_months")
     )
     events = get_events_between_dates(raw_event_data_start_date, event_end_date, db, selected_companies=companies)
+    # filter out the REVIEWED dispositions from Intel processing events.
+    event_dispositions = [dispo for dispo in events["Disposition"].unique() if dispo != "REVIEWED"]
+    _name = events.name
+    events = events[events.Disposition.isin(event_dispositions)]
+    events.name = _name
+     
     add_email_alert_counts_per_event(events, db)
     incidents = get_incidents_from_events(events)
     tables_for_xlsx.append(incidents)
@@ -449,6 +463,7 @@ def main():
     # hard code for now
     available_reports = {
         "high_level": "IDR operational alert, event, and indicator based metrics.",
+        "operational": "IDR operational metrics.",
         "analysts": "Statistics for analysts.",
     }
     parser.add_argument(
@@ -473,12 +488,6 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.approved_reports:
-        logging.error("You must specify a report to run.")
-        return True
-        # XXX Should it not default to all reports?
-        # args.approved_reports = list(available_reports.keys())
-
     # work out of home dir
     os.chdir(HOME_PATH)
 
@@ -499,6 +508,12 @@ def main():
         return email_reports_based_on_configuration(
             config, report_context_map, args.send_archived_reports, archive=True
         )
+
+    if not args.approved_reports:
+        logging.error("You must specify a report to run.")
+        return True
+        # XXX Should it not default to all reports?
+        # args.approved_reports = list(available_reports.keys())
 
     # connect
     db_config = config["database"]
@@ -528,11 +543,18 @@ def main():
     else:
         end_date = event_end_date = datetime.utcnow()
 
-    ## High Level Report ##
-    if "high_level" in args.approved_reports:
+    ## Operational Report (no analysts) ##
+    if "operational" in args.approved_reports:
         report_context_map = create_high_level_report(
-            config, db, start_date, end_date, event_start_date, event_end_date, report_context_map
+            config, db, "operational", start_date, end_date, event_start_date, event_end_date, report_context_map, no_analyst_metrics=True
         )
+
+    ## High Level Report ##
+    elif "high_level" in args.approved_reports:
+        report_context_map = create_high_level_report(
+            config, db, "high_level", start_date, end_date, event_start_date, event_end_date, report_context_map,
+        )
+
 
     ####################
     ## Analyst Report ##
